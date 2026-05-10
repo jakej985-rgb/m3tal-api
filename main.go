@@ -151,9 +151,11 @@ type ContainerMetric struct {
 }
 
 type NetworkMetrics struct {
-	Down string  `json:"down"`
-	Up   string  `json:"up"`
-	Load float64 `json:"load"`
+	Down    string  `json:"down"`
+	Up      string  `json:"up"`
+	DownRaw float64 `json:"down_raw"`
+	UpRaw   float64 `json:"up_raw"`
+	Load    float64 `json:"load"`
 }
 
 // --- Persistence ---
@@ -216,28 +218,13 @@ func historyAgent(s *M3talState, stateDir string) {
 		Timestamp int64   `json:"timestamp"`
 	}
 
-	parseNet := func(s string) float64 {
-		fields := strings.Fields(s)
-		if len(fields) < 2 { return 0 }
-		val, _ := strconv.ParseFloat(fields[0], 64)
-		unit := strings.ToUpper(fields[1])
-		if strings.Contains(unit, "K") {
-			return val / 1024.0
-		} else if strings.Contains(unit, "G") {
-			return val * 1024.0
-		} else if strings.Contains(unit, "B") && !strings.Contains(unit, "M") {
-			return val / (1024.0 * 1024.0)
-		}
-		return val // Default to MB/s
-	}
-
 	record := func() {
 		s.mu.RLock()
 		newPoint := HistoryPoint{
 			CPU:       s.System.CPU,
 			Mem:       s.System.Mem,
-			NetDown:   parseNet(s.Network.Down),
-			NetUp:     parseNet(s.Network.Up),
+			NetDown:   s.Network.DownRaw,
+			NetUp:     s.Network.UpRaw,
 			Timestamp: time.Now().Unix(),
 		}
 		s.mu.RUnlock()
@@ -366,9 +353,11 @@ func metricsAgent(s *M3talState) {
 			Timestamp: now.Unix(),
 		}
 		s.Network = NetworkMetrics{
-			Down: formatSpeed(down * 1024 * 1024),
-			Up:   formatSpeed(up * 1024 * 1024),
-			Load: load,
+			Down:    formatSpeed(down * 1024 * 1024),
+			Up:      formatSpeed(up * 1024 * 1024),
+			DownRaw: down,
+			UpRaw:   up,
+			Load:    load,
 		}
 		s.CPU = cpuVal
 		s.Timestamp = now.Unix()
