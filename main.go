@@ -409,8 +409,28 @@ func hardwareAgent(s *M3talState) {
 		// --- GPU Usage Discovery ---
 		radeontopFound := false
 		radeontopPath := "/usr/bin/radeontop"
-		if _, err := os.Stat(radeontopPath); err == nil {
-			cmd := exec.Command(radeontopPath, "-d", "-", "-l", "1")
+		
+		// Attempt 1: Direct execution
+		cmd := exec.Command(radeontopPath, "-d", "-", "-l", "1")
+		if output, err := cmd.CombinedOutput(); err == nil {
+			line := string(output)
+			radeontopFound = true
+			gpuStats.Active = true
+			if m := gpuRe.FindStringSubmatch(line); len(m) > 1 {
+				if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+					gpuStats.Load = int(f)
+				}
+			}
+			if m := vramRe.FindStringSubmatch(line); len(m) > 1 {
+				if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+					gpuStats.MemUsed = int(f)
+				}
+			}
+			log.Printf("[GPU] radeontop (direct) success: Load=%d%%", gpuStats.Load)
+		} else {
+			// Attempt 2: chroot /host (uses host libraries)
+			log.Printf("[GPU] radeontop (direct) failed, trying chroot /host...")
+			cmd = exec.Command("chroot", "/host", "radeontop", "-d", "-", "-l", "1")
 			if output, err := cmd.CombinedOutput(); err == nil {
 				line := string(output)
 				radeontopFound = true
@@ -425,12 +445,10 @@ func hardwareAgent(s *M3talState) {
 						gpuStats.MemUsed = int(f)
 					}
 				}
-				log.Printf("[GPU] radeontop success: Load=%d%%, VRAM=%dMB", gpuStats.Load, gpuStats.MemUsed)
+				log.Printf("[GPU] radeontop (chroot) success: Load=%d%%", gpuStats.Load)
 			} else {
-				log.Printf("[GPU] radeontop error: %v, output: %s", err, string(output))
+				log.Printf("[GPU] radeontop (chroot) failed: %v, output: %s", err, string(output))
 			}
-		} else {
-			log.Printf("[GPU] radeontop not found at %s", radeontopPath)
 		}
 
 		if !radeontopFound {
