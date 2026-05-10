@@ -204,6 +204,52 @@ func saveAtomic(path string, data interface{}) {
 
 // --- Main ---
 
+func historyAgent(s *M3talState, stateDir string) {
+	ticker := time.NewTicker(60 * time.Second)
+	historyPath := filepath.Join(stateDir, "history.json")
+
+	type HistoryPoint struct {
+		CPU       float64 `json:"cpu"`
+		Mem       float64 `json:"mem"`
+		NetDown   float64 `json:"net_down"`
+		NetUp     float64 `json:"net_up"`
+		Timestamp int64   `json:"timestamp"`
+	}
+
+	parseNet := func(s string) float64 {
+		fields := strings.Fields(s)
+		if len(fields) < 1 { return 0 }
+		val, _ := strconv.ParseFloat(fields[0], 64)
+		return val
+	}
+
+	for range ticker.C {
+		s.mu.RLock()
+		newPoint := HistoryPoint{
+			CPU:       s.System.CPU,
+			Mem:       s.System.Mem,
+			NetDown:   parseNet(s.Network.Down),
+			NetUp:     parseNet(s.Network.Up),
+			Timestamp: time.Now().Unix(),
+		}
+		s.mu.RUnlock()
+
+		var history []HistoryPoint
+		if data, err := os.ReadFile(historyPath); err == nil {
+			json.Unmarshal(data, &history)
+		}
+
+		history = append(history, newPoint)
+		if len(history) > 1440 {
+			history = history[len(history)-1440:]
+		}
+
+		if data, err := json.Marshal(history); err == nil {
+			os.WriteFile(historyPath, data, 0644)
+		}
+	}
+}
+
 func main() {
 	state := &M3talState{
 		Cooldowns:  make(map[string]time.Time),
@@ -232,6 +278,7 @@ func main() {
 	go healerAgent(ctx, state)
 	go notifyAgent(state)
 	go saveAgent(ctx, state, stateDir)
+	go historyAgent(state, stateDir)
 
 	select {}
 }
