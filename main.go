@@ -801,9 +801,8 @@ func hardwareAgent(s *M3talState) {
 
 func storageAgent(s *M3talState) {
 	ticker := time.NewTicker(30 * time.Second)
-	// Robust regex to capture the last number on the line (RAW_VALUE) for temperature rows. 
-	// We use greedy [^\n]* to ensure we skip intermediate columns (VALUE/WORST) and hit the actual RAW_VALUE at the end.
-	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:)[^\n]*\s+(\d+)(?:\s|\(|$)`)
+	// Identifiers for temperature lines across SATA, SAS, and NVMe
+	tempKeywords := []string{"Temperature_Celsius", "Airflow_Temperature_Cel", "Composite Temperature", "Current Drive Temperature:"}
 
 	// Detect host root mount (bind-mounted at /host)
 	hostRoot := "/host"
@@ -930,10 +929,32 @@ func storageAgent(s *M3talState) {
 
 				// Even if err != nil, smartctl often returns data with warning bits set
 				if len(output) > 0 {
-					if m := smartRe.FindStringSubmatch(string(output)); len(m) > 1 {
-						if f, err := strconv.ParseFloat(m[1], 64); err == nil {
-							driveT = f
+					lines := strings.Split(string(output), "\n")
+					for _, line := range lines {
+						matched := false
+						for _, kw := range tempKeywords {
+							if strings.Contains(strings.ToLower(line), strings.ToLower(kw)) {
+								matched = true
+								break
+							}
 						}
+
+						if matched {
+							fields := strings.Fields(line)
+							if len(fields) > 0 {
+								// Look for the last numeric value on the line
+								for i := len(fields) - 1; i >= 0; i-- {
+									f := fields[i]
+									// Strip non-numeric suffixes
+									f = regexp.MustCompile(`[^\d].*`).ReplaceAllString(f, "")
+									if val, err := strconv.ParseFloat(f, 64); err == nil && val > 0 && val < 150 {
+										driveT = val
+										break
+									}
+								}
+							}
+						}
+						if driveT > 0 { break }
 					}
 				} else if err != nil {
 					log.Printf("[STORAGE] smartctl failed for %s: %v", phys, err)
