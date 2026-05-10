@@ -407,9 +407,11 @@ func hardwareAgent(s *M3talState) {
 		gpuStats.Temp = gpuT
 		gpuStats.MemTotal = 1024
 
+		// Try radeontop via absolute path (bind-mounted from host)
 		radeontopFound := false
-		if _, err := exec.LookPath("radeontop"); err == nil {
-			cmd := exec.Command("radeontop", "-d", "-", "-l", "1")
+		radeontopPath := "/usr/bin/radeontop"
+		if _, err := os.Stat(radeontopPath); err == nil {
+			cmd := exec.Command(radeontopPath, "-d", "-", "-l", "1")
 			if output, err := cmd.CombinedOutput(); err == nil {
 				line := string(output)
 				radeontopFound = true
@@ -424,25 +426,34 @@ func hardwareAgent(s *M3talState) {
 						gpuStats.MemUsed = int(f)
 					}
 				}
+			} else {
+				log.Printf("[GPU] radeontop error: %v, output: %s", err, string(output))
 			}
 		}
 
 		if !radeontopFound {
-			if data, err := os.ReadFile("/sys/class/drm/card0/device/gpu_busy_percent"); err == nil {
-				if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-					gpuStats.Load = val
-					gpuStats.Active = true
+			// Scan multiple DRM card nodes for broader GPU compatibility
+			for _, card := range []string{"card0", "card1"} {
+				base := "/sys/class/drm/" + card + "/device"
+				if data, err := os.ReadFile(base + "/gpu_busy_percent"); err == nil {
+					if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+						gpuStats.Load = val
+						gpuStats.Active = true
+					}
 				}
-			}
-			if data, err := os.ReadFile("/sys/class/drm/card0/device/mem_info_vram_used"); err == nil {
-				if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
-					gpuStats.MemUsed = int(val / (1024 * 1024))
-					gpuStats.Active = true
+				if data, err := os.ReadFile(base + "/mem_info_vram_used"); err == nil {
+					if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
+						gpuStats.MemUsed = int(val / (1024 * 1024))
+						gpuStats.Active = true
+					}
 				}
-			}
-			if data, err := os.ReadFile("/sys/class/drm/card0/device/mem_info_vram_total"); err == nil {
-				if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
-					gpuStats.MemTotal = int(val / (1024 * 1024))
+				if data, err := os.ReadFile(base + "/mem_info_vram_total"); err == nil {
+					if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
+						gpuStats.MemTotal = int(val / (1024 * 1024))
+					}
+				}
+				if gpuStats.Active {
+					break
 				}
 			}
 		}
@@ -471,35 +482,113 @@ func storageAgent(s *M3talState) {
 	ticker := time.NewTicker(30 * time.Second)
 	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:).*?(\d+)`)
 
+	// Detect host root mount (bind-mounted at /host)
+	hostRoot := "/host"
+	if _, err := os.Stat(hostRoot); err != nil {
+		hostRoot = ""
+	}
+
 	for range ticker.C {
 		disks := make(map[string]DiskInfo)
 		highestUsage := 0.0
 
-		parts, _ := disk.Partitions(false)
-		for _, p := range parts {
-			if strings.HasPrefix(p.Mountpoint, "/proc") || strings.HasPrefix(p.Mountpoint, "/dev") || strings.HasPrefix(p.Mountpoint, "/sys") {
+		// Strategy: Read /proc/mounts from host to discover real mount points
+		var mountEntries []struct {
+			Device     string
+			Mountpoint string
+		}
+
+		if hostRoot != "" {
+			// Parse /proc/mounts for real host filesystems
+			if data, err := os.ReadFile("/proc/mounts"); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					fields := strings.Fields(line)
+					if len(fields) < 3 {
+						continue
+					}
+					dev, mnt, fstype := fields[0], fields[1], fields[2]
+					// Only real block devices with real filesystems
+					if !strings.HasPrefix(dev, "/dev/") {
+						continue
+					}
+					if fstype == "squashfs" || fstype == "tmpfs" || fstype == "devtmpfs" {
+						continue
+					}
+					// Skip container-internal mounts, only use /host/* mounts
+					if !strings.HasPrefix(mnt, "/host") && mnt != "/" {
+						continue
+					}
+					// Skip Docker overlays and internal paths
+					if strings.Contains(mnt, "docker") || strings.Contains(mnt, "overlay") {
+						continue
+					}
+					mountEntries = append(mountEntries, struct {
+						Device     string
+						Mountpoint string
+					}{Device: dev, Mountpoint: mnt})
+				}
+			}
+		}
+
+		// Fallback: use gopsutil if no host mounts found
+		if len(mountEntries) == 0 {
+			parts, _ := disk.Partitions(false)
+			for _, p := range parts {
+				if strings.HasPrefix(p.Mountpoint, "/proc") || strings.HasPrefix(p.Mountpoint, "/dev") || strings.HasPrefix(p.Mountpoint, "/sys") {
+					continue
+				}
+				mountEntries = append(mountEntries, struct {
+					Device     string
+					Mountpoint string
+				}{Device: p.Device, Mountpoint: p.Mountpoint})
+			}
+		}
+
+		seen := make(map[string]bool)
+		for _, entry := range mountEntries {
+			// Deduplicate by device
+			if seen[entry.Device] {
 				continue
 			}
-			usage, err := disk.Usage(p.Mountpoint)
-			if err != nil {
+			seen[entry.Device] = true
+
+			usage, err := disk.Usage(entry.Mountpoint)
+			if err != nil || usage.Total == 0 {
 				continue
 			}
-			label := p.Mountpoint
-			if label == "/" {
+
+			// Derive a human-readable label
+			label := entry.Mountpoint
+			if label == "/" || label == "/host" {
 				label = "System"
+			} else if strings.HasPrefix(label, "/host/") {
+				label = strings.TrimPrefix(label, "/host")
+				label = filepath.Base(label)
 			} else {
 				label = filepath.Base(label)
 			}
 
+			// Skip tiny/virtual partitions (< 1GB)
+			if usage.Total < 1024*1024*1024 {
+				continue
+			}
+
 			var driveT float64
-			dev := p.Device
+			dev := entry.Device
+			smartctlPath := "/usr/sbin/smartctl"
 			if strings.HasPrefix(dev, "/dev/") {
-				if _, err := exec.LookPath("smartctl"); err == nil {
+				if _, err := os.Stat(smartctlPath); err == nil {
 					phys := dev
-					if len(dev) > 8 && (dev[7] >= '0' && dev[7] <= '9') {
-						phys = dev[:7]
+					// Strip partition number: /dev/sda1 -> /dev/sda
+					if len(dev) > 8 && (dev[len(dev)-1] >= '0' && dev[len(dev)-1] <= '9') {
+						for i := len(dev) - 1; i > 4; i-- {
+							if dev[i] < '0' || dev[i] > '9' {
+								phys = dev[:i+1]
+								break
+							}
+						}
 					}
-					cmd := exec.Command("smartctl", "-a", phys)
+					cmd := exec.Command(smartctlPath, "-a", phys)
 					if output, err := cmd.CombinedOutput(); err == nil {
 						if m := smartRe.FindStringSubmatch(string(output)); len(m) > 1 {
 							if f, err := strconv.ParseFloat(m[1], 64); err == nil {
