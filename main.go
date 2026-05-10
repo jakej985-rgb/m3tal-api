@@ -302,13 +302,13 @@ func apiAgent(ctx context.Context, s *M3talState) {
 	}
 
 	http.HandleFunc("/api/containers/start", func(w http.ResponseWriter, r *http.Request) {
-		handleContainerAction(ctx, cli, w, r, "start")
+		handleContainerAction(ctx, cli, s, w, r, "start")
 	})
 	http.HandleFunc("/api/containers/stop", func(w http.ResponseWriter, r *http.Request) {
-		handleContainerAction(ctx, cli, w, r, "stop")
+		handleContainerAction(ctx, cli, s, w, r, "stop")
 	})
 	http.HandleFunc("/api/containers/restart", func(w http.ResponseWriter, r *http.Request) {
-		handleContainerAction(ctx, cli, w, r, "restart")
+		handleContainerAction(ctx, cli, s, w, r, "restart")
 	})
 
 	log.Printf("🚀 Control Plane API listening on :5050")
@@ -317,7 +317,7 @@ func apiAgent(ctx context.Context, s *M3talState) {
 	}
 }
 
-func handleContainerAction(ctx context.Context, cli *client.Client, w http.ResponseWriter, r *http.Request, action string) {
+func handleContainerAction(ctx context.Context, cli *client.Client, s *M3talState, w http.ResponseWriter, r *http.Request, action string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -334,12 +334,11 @@ func handleContainerAction(ctx context.Context, cli *client.Client, w http.Respo
 	var err error
 	switch action {
 	case "start":
-		err = cli.ContainerStart(ctx, req.Name, client.ContainerStartOptions{})
+		_, err = cli.ContainerStart(ctx, req.Name, client.ContainerStartOptions{})
 	case "stop":
-		timeout := 10 * time.Second
-		err = cli.ContainerStop(ctx, req.Name, &timeout)
+		_, err = cli.ContainerStop(ctx, req.Name, client.ContainerStopOptions{})
 	case "restart":
-		err = cli.ContainerRestart(ctx, req.Name, client.ContainerRestartOptions{})
+		_, err = cli.ContainerRestart(ctx, req.Name, client.ContainerRestartOptions{})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -348,6 +347,20 @@ func handleContainerAction(ctx context.Context, cli *client.Client, w http.Respo
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
+
+	// Record the successful action as a decision
+	s.mu.Lock()
+	s.Decisions = append(s.Decisions, Decision{
+		Type:   action,
+		Target: req.Name,
+		Reason: "User initiated via Dashboard",
+		Time:   time.Now().Unix(),
+	})
+	if len(s.Decisions) > 50 {
+		s.Decisions = s.Decisions[1:]
+	}
+	s.dirty = true
+	s.mu.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": fmt.Sprintf("Container %s %sed", req.Name, action)})
 }
@@ -494,10 +507,13 @@ func hardwareAgent(s *M3talState) {
 					if data, err := os.ReadFile(tempPath); err == nil {
 						if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
 							t := float64(val) / 1000.0
-							if n == "amdgpu" || n == "radeon" {
+							switch n {
+							case "amdgpu", "radeon":
 								gpuT = t
-							} else if n == "coretemp" || n == "cpu_thermal" || n == "k10temp" {
-								if cpuT == 0 || t > cpuT { cpuT = t }
+							case "coretemp", "cpu_thermal", "k10temp":
+								if cpuT == 0 || t > cpuT {
+									cpuT = t
+								}
 							}
 						}
 					}
@@ -1088,7 +1104,7 @@ func healerAgent(ctx context.Context, s *M3talState) {
 			if c.Managed && (c.State == "exited" || c.State == "dead") {
 				log.Printf("🛡️ HEALER: Detected crashed container: %s. Restarting...", c.Name)
 
-				_, err := cli.ContainerRestart(ctx, c.Name, client.ContainerRestartOptions{})
+				_, err = cli.ContainerRestart(ctx, c.Name, client.ContainerRestartOptions{})
 				if err != nil {
 					log.Printf("❌ HEALER: Failed to restart %s: %v", c.Name, err)
 					continue
@@ -1222,7 +1238,7 @@ func listenerAgent(ctx context.Context, s *M3talState) {
 					}
 
 					sendTelegram(token, chatStr, fmt.Sprintf("⏳ Restarting <code>%s</code>...", target))
-					_, err := cli.ContainerRestart(ctx, target, client.ContainerRestartOptions{})
+					_, err = cli.ContainerRestart(ctx, target, client.ContainerRestartOptions{})
 					if err != nil {
 						sendTelegram(token, chatStr, fmt.Sprintf("❌ Error: %v", err))
 					} else {
