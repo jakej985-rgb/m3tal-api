@@ -270,10 +270,17 @@ func main() {
 		stateDir = filepath.Join("..", "state")
 	}
 
+	// Setup logging to file for dashboard visibility
+	logsDir := filepath.Join(stateDir, "logs")
+	os.MkdirAll(logsDir, 0755)
+	if logFile, err := os.OpenFile(filepath.Join(logsDir, "m3tal-runtime.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fmt.Println("🚀 M3TAL Go Backend (Linux-Ready) starting...")
+	log.Println("🚀 M3TAL Go Backend (Linux-Ready) starting...")
 
 	// Launch Agents
 	go metricsAgent(state)
@@ -323,7 +330,9 @@ func apiAgent(ctx context.Context, s *M3talState) {
 
 func handleContainerAction(ctx context.Context, cli *client.Client, s *M3talState, w http.ResponseWriter, r *http.Request, action string) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "Method not allowed"})
 		return
 	}
 
@@ -331,7 +340,9 @@ func handleContainerAction(ctx context.Context, cli *client.Client, s *M3talStat
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "Invalid request body"})
 		return
 	}
 
@@ -371,7 +382,9 @@ func handleContainerAction(ctx context.Context, cli *client.Client, s *M3talStat
 
 func handleContainerLogs(ctx context.Context, cli *client.Client, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "Method not allowed"})
 		return
 	}
 
@@ -380,7 +393,9 @@ func handleContainerLogs(ctx context.Context, cli *client.Client, w http.Respons
 		Tail string `json:"tail"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "Invalid request body"})
 		return
 	}
 
