@@ -612,27 +612,36 @@ func storageAgent(s *M3talState) {
 
 			var driveT float64
 			dev := entry.Device
-			smartctlPath := "/usr/sbin/smartctl"
 			if strings.HasPrefix(dev, "/dev/") {
-				if _, err := os.Stat(smartctlPath); err == nil {
-					phys := dev
-					// Strip partition number: /dev/sda1 -> /dev/sda
-					if len(dev) > 8 && (dev[len(dev)-1] >= '0' && dev[len(dev)-1] <= '9') {
-						for i := len(dev) - 1; i > 4; i-- {
-							if dev[i] < '0' || dev[i] > '9' {
-								phys = dev[:i+1]
-								break
-							}
+				phys := dev
+				// Strip partition number: /dev/sda1 -> /dev/sda
+				if len(dev) > 8 && (dev[len(dev)-1] >= '0' && dev[len(dev)-1] <= '9') {
+					for i := len(dev) - 1; i > 4; i-- {
+						if dev[i] < '0' || dev[i] > '9' {
+							phys = dev[:i+1]
+							break
 						}
 					}
-					cmd := exec.Command(smartctlPath, "-a", phys)
-					if output, err := cmd.CombinedOutput(); err == nil {
-						if m := smartRe.FindStringSubmatch(string(output)); len(m) > 1 {
-							if f, err := strconv.ParseFloat(m[1], 64); err == nil {
-								driveT = f
-							}
+				}
+
+				// Strategy: Use chroot /host to run the host's smartctl
+				cmd := exec.Command("chroot", "/host", "smartctl", "-a", phys)
+				output, err := cmd.CombinedOutput()
+				
+				// Fallback to direct container execution if chroot fails
+				if err != nil {
+					cmd = exec.Command("/usr/sbin/smartctl", "-a", phys)
+					output, err = cmd.CombinedOutput()
+				}
+
+				if err == nil {
+					if m := smartRe.FindStringSubmatch(string(output)); len(m) > 1 {
+						if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+							driveT = f
 						}
 					}
+				} else {
+					log.Printf("[STORAGE] smartctl failed for %s: %v", phys, err)
 				}
 			}
 
