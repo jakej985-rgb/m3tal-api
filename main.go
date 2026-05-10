@@ -533,7 +533,7 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 	if err != nil {
 		return
 	}
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	for range ticker.C {
 		res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 		if err != nil {
@@ -545,6 +545,55 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 			if len(c.Names) > 0 {
 				name = c.Names[0][1:]
 			}
+			
+			cpuPerc := 0.0
+			memPerc := 0.0
+
+			// Only fetch stats for running containers to save resources
+			if strings.ToLower(string(c.State)) == "running" {
+				stats, err := cli.ContainerStats(ctx, c.ID, client.ContainerStatsOptions{Stream: false})
+				if err == nil {
+					var v struct {
+						CPUStats struct {
+							CPUUsage struct {
+								TotalUsage uint64 `json:"total_usage"`
+							} `json:"cpu_usage"`
+							SystemCPUUsage uint64 `json:"system_cpu_usage"`
+							OnlineCPUs     uint64 `json:"online_cpus"`
+						} `json:"cpu_stats"`
+						PreCPUStats struct {
+							CPUUsage struct {
+								TotalUsage uint64 `json:"total_usage"`
+							} `json:"cpu_usage"`
+							SystemCPUUsage uint64 `json:"system_cpu_usage"`
+						} `json:"precpu_stats"`
+						MemoryStats struct {
+							Usage    uint64 `json:"usage"`
+							Limit    uint64 `json:"limit"`
+							Stats    map[string]uint64 `json:"stats"`
+						} `json:"memory_stats"`
+					}
+					if err := json.NewDecoder(stats.Body).Decode(&v); err == nil {
+						// CPU Calculation
+						cpuDelta := float64(v.CPUStats.CPUUsage.TotalUsage) - float64(v.PreCPUStats.CPUUsage.TotalUsage)
+						sysDelta := float64(v.CPUStats.SystemCPUUsage) - float64(v.PreCPUStats.SystemCPUUsage)
+						cpus := float64(v.CPUStats.OnlineCPUs)
+						if cpus == 0 { cpus = 1 }
+						if sysDelta > 0 && cpuDelta > 0 {
+							cpuPerc = (cpuDelta / sysDelta) * cpus * 100.0
+						}
+
+						// Memory Calculation (Usage - Cache)
+						if v.MemoryStats.Limit > 0 {
+							cache := v.MemoryStats.Stats["inactive_file"]
+							if cache == 0 { cache = v.MemoryStats.Stats["cache"] }
+							memPerc = (float64(v.MemoryStats.Usage - cache) / float64(v.MemoryStats.Limit)) * 100.0
+						}
+					}
+					stats.Body.Close()
+				}
+			}
+
 			managed := false
 			if _, ok := c.Labels["m3tal.managed"]; ok {
 				managed = true
@@ -553,8 +602,8 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 			}
 			newStats = append(newStats, ContainerMetric{
 				Name:    name,
-				CPU:     0.0,
-				Mem:     0.0,
+				CPU:     cpuPerc,
+				Mem:     memPerc,
 				Status:  c.Status,
 				State:   string(c.State),
 				Managed: managed,
@@ -728,7 +777,8 @@ func hardwareAgent(s *M3talState) {
 
 func storageAgent(s *M3talState) {
 	ticker := time.NewTicker(30 * time.Second)
-	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:).*?(\d+)`)
+	// Robust regex to capture the last number on the line (RAW_VALUE) for temperature rows
+	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:)[^\n]*?\s+(\d+)(?:\s|\(|$)`)
 
 	// Detect host root mount (bind-mounted at /host)
 	hostRoot := "/host"
@@ -836,30 +886,31 @@ func storageAgent(s *M3talState) {
 				}
 
 				// Strategy: Use chroot /host to run the host's smartctl
-				// We try absolute path first as host PATH might not be set in chroot
+				var output []byte
+				var err error
+
+				// Try chroot first
 				cmd := exec.Command("chroot", "/host", "/usr/sbin/smartctl", "-a", phys)
-				output, err := cmd.CombinedOutput()
-				
-				if err != nil {
-					// Try without absolute path
+				output, err = cmd.CombinedOutput()
+				if err != nil && len(output) == 0 {
 					cmd = exec.Command("chroot", "/host", "smartctl", "-a", phys)
 					output, err = cmd.CombinedOutput()
 				}
 				
-				// Fallback to direct container execution if chroot fails
-				if err != nil {
-					log.Printf("[STORAGE] chroot smartctl failed: %v, output: %s. Falling back...", err, string(output))
+				// Fallback to direct container execution if chroot yielded nothing
+				if len(output) == 0 {
 					cmd = exec.Command("/usr/sbin/smartctl", "-a", phys)
-					output, err = cmd.CombinedOutput()
+					output, _ = cmd.CombinedOutput()
 				}
 
-				if err == nil {
+				// Even if err != nil, smartctl often returns data with warning bits set
+				if len(output) > 0 {
 					if m := smartRe.FindStringSubmatch(string(output)); len(m) > 1 {
 						if f, err := strconv.ParseFloat(m[1], 64); err == nil {
 							driveT = f
 						}
 					}
-				} else {
+				} else if err != nil {
 					log.Printf("[STORAGE] smartctl failed for %s: %v", phys, err)
 				}
 			}
