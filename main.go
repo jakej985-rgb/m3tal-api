@@ -368,37 +368,36 @@ func hardwareAgent(s *M3talState) {
 		var cpuT, gpuT float64
 		var gpuStats GpuStats
 
-		for i := 0; i < 8; i++ {
-			path := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i)
-			if data, err := os.ReadFile(path); err == nil {
-				if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-					cpuT = float64(val) / 1000.0
-					if cpuT > 20 && cpuT < 110 {
-						break
-					}
-				}
-			}
-			hwPath := fmt.Sprintf("/sys/class/hwmon/hwmon%d/temp1_input", i)
-			if data, err := os.ReadFile(hwPath); err == nil {
-				if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-					cpuT = float64(val) / 1000.0
-					if cpuT > 20 && cpuT < 110 {
-						break
+		// --- Resilient Temp Discovery (hwmon walking) ---
+		if entries, err := os.ReadDir("/sys/class/hwmon"); err == nil {
+			for _, entry := range entries {
+				namePath := filepath.Join("/sys/class/hwmon", entry.Name(), "name")
+				tempPath := filepath.Join("/sys/class/hwmon", entry.Name(), "temp1_input")
+				if name, err := os.ReadFile(namePath); err == nil {
+					n := strings.TrimSpace(string(name))
+					if data, err := os.ReadFile(tempPath); err == nil {
+						if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+							t := float64(val) / 1000.0
+							if n == "amdgpu" || n == "radeon" {
+								gpuT = t
+							} else if n == "coretemp" || n == "cpu_thermal" || n == "k10temp" {
+								if cpuT == 0 || t > cpuT { cpuT = t }
+							}
+						}
 					}
 				}
 			}
 		}
 
-		paths := []string{
-			"/sys/class/drm/card0/device/hwmon/hwmon0/temp1_input",
-			"/sys/class/drm/card0/device/hwmon/hwmon1/temp1_input",
-			"/sys/class/drm/card0/device/hwmon/hwmon2/temp1_input",
-		}
-		for _, p := range paths {
-			if data, err := os.ReadFile(p); err == nil {
-				if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-					gpuT = float64(val) / 1000.0
-					break
+		// Fallback for CPU if hwmon failed
+		if cpuT == 0 {
+			for i := 0; i < 5; i++ {
+				path := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i)
+				if data, err := os.ReadFile(path); err == nil {
+					if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+						cpuT = float64(val) / 1000.0
+						break
+					}
 				}
 			}
 		}
@@ -432,28 +431,36 @@ func hardwareAgent(s *M3talState) {
 		}
 
 		if !radeontopFound {
-			// Scan multiple DRM card nodes for broader GPU compatibility
-			for _, card := range []string{"card0", "card1"} {
-				base := "/sys/class/drm/" + card + "/device"
-				if data, err := os.ReadFile(base + "/gpu_busy_percent"); err == nil {
-					if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-						gpuStats.Load = val
-						gpuStats.Active = true
+			// Scan all DRM cards
+			if cards, err := os.ReadDir("/sys/class/drm"); err == nil {
+				for _, card := range cards {
+					if !strings.HasPrefix(card.Name(), "card") || strings.Contains(card.Name(), "-") {
+						continue
 					}
-				}
-				if data, err := os.ReadFile(base + "/mem_info_vram_used"); err == nil {
-					if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
-						gpuStats.MemUsed = int(val / (1024 * 1024))
-						gpuStats.Active = true
+					base := filepath.Join("/sys/class/drm", card.Name(), "device")
+					
+					// Load
+					if data, err := os.ReadFile(filepath.Join(base, "gpu_busy_percent")); err == nil {
+						if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+							gpuStats.Load = val
+							gpuStats.Active = true
+						}
 					}
-				}
-				if data, err := os.ReadFile(base + "/mem_info_vram_total"); err == nil {
-					if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
-						gpuStats.MemTotal = int(val / (1024 * 1024))
+					
+					// VRAM
+					if data, err := os.ReadFile(filepath.Join(base, "mem_info_vram_used")); err == nil {
+						if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
+							gpuStats.MemUsed = int(val / (1024 * 1024))
+							gpuStats.Active = true
+						}
 					}
-				}
-				if gpuStats.Active {
-					break
+					if data, err := os.ReadFile(filepath.Join(base, "mem_info_vram_total")); err == nil {
+						if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
+							gpuStats.MemTotal = int(val / (1024 * 1024))
+						}
+					}
+					
+					if gpuStats.Active { break }
 				}
 			}
 		}
