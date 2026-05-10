@@ -218,12 +218,20 @@ func historyAgent(s *M3talState, stateDir string) {
 
 	parseNet := func(s string) float64 {
 		fields := strings.Fields(s)
-		if len(fields) < 1 { return 0 }
+		if len(fields) < 2 { return 0 }
 		val, _ := strconv.ParseFloat(fields[0], 64)
-		return val
+		unit := strings.ToUpper(fields[1])
+		if strings.Contains(unit, "K") {
+			return val / 1024.0
+		} else if strings.Contains(unit, "G") {
+			return val * 1024.0
+		} else if strings.Contains(unit, "B") && !strings.Contains(unit, "M") {
+			return val / (1024.0 * 1024.0)
+		}
+		return val // Default to MB/s
 	}
 
-	for range ticker.C {
+	record := func() {
 		s.mu.RLock()
 		newPoint := HistoryPoint{
 			CPU:       s.System.CPU,
@@ -234,9 +242,14 @@ func historyAgent(s *M3talState, stateDir string) {
 		}
 		s.mu.RUnlock()
 
+		// Skip if state isn't ready yet (e.g. just started)
+		if newPoint.CPU == 0 && newPoint.Mem == 0 { return }
+
 		var history []HistoryPoint
 		if data, err := os.ReadFile(historyPath); err == nil {
-			json.Unmarshal(data, &history)
+			if err := json.Unmarshal(data, &history); err != nil {
+				log.Printf("[HISTORY] Failed to parse existing history: %v", err)
+			}
 		}
 
 		history = append(history, newPoint)
@@ -244,9 +257,17 @@ func historyAgent(s *M3talState, stateDir string) {
 			history = history[len(history)-1440:]
 		}
 
-		if data, err := json.Marshal(history); err == nil {
-			os.WriteFile(historyPath, data, 0644)
-		}
+		saveAtomic(historyPath, history)
+	}
+
+	// Initial record on start
+	go func() {
+		time.Sleep(5 * time.Second) // Wait for agents to gather first metrics
+		record()
+	}()
+
+	for range ticker.C {
+		record()
 	}
 }
 
