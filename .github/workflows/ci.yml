@@ -1,0 +1,27 @@
+name: M3TAL Backend CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test-go-backend:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        cache-dependency-path: go.sum
+    - name: Go Format
+      run: go fmt ./...
+    - name: Go Vet
+      run: go vet ./...
+    - name: Go Build
+      run: go build ./...
