@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -310,6 +311,9 @@ func apiAgent(ctx context.Context, s *M3talState) {
 	http.HandleFunc("/api/containers/restart", func(w http.ResponseWriter, r *http.Request) {
 		handleContainerAction(ctx, cli, s, w, r, "restart")
 	})
+	http.HandleFunc("/api/containers/logs", func(w http.ResponseWriter, r *http.Request) {
+		handleContainerLogs(ctx, cli, w, r)
+	})
 
 	log.Printf("🚀 Control Plane API listening on :5050")
 	if err := http.ListenAndServe(":5050", nil); err != nil {
@@ -363,6 +367,66 @@ func handleContainerAction(ctx context.Context, cli *client.Client, s *M3talStat
 	s.mu.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": fmt.Sprintf("Container %s %sed", req.Name, action)})
+}
+
+func handleContainerLogs(ctx context.Context, cli *client.Client, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		Tail string `json:"tail"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	tail := req.Tail
+	if tail == "" {
+		tail = "80"
+	}
+
+	logReader, err := cli.ContainerLogs(ctx, req.Name, client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       tail,
+	})
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	defer logReader.Close()
+
+	raw, _ := io.ReadAll(logReader)
+
+	// Docker multiplexed stream has 8-byte headers per frame; strip them
+	var clean bytes.Buffer
+	for len(raw) > 8 {
+		frameSize := int(raw[4])<<24 | int(raw[5])<<16 | int(raw[6])<<8 | int(raw[7])
+		if 8+frameSize > len(raw) {
+			break
+		}
+		clean.Write(raw[8 : 8+frameSize])
+		raw = raw[8+frameSize:]
+	}
+	// If stripping produced nothing, the stream may not be multiplexed (TTY mode)
+	output := clean.String()
+	if output == "" {
+		output = string(raw)
+	}
+
+	// Cap output size
+	if len(output) > 8000 {
+		output = output[len(output)-8000:]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "logs": output})
 }
 
 func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
