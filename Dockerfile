@@ -27,5 +27,11 @@ COPY --from=builder /app/m3tal-backend .
 ENV STATE_DIR=/docker/control-plane/state
 ENV TZ=America/Denver
 
+# OCI Image Labels
+LABEL org.opencontainers.image.title="M3TAL Control Plane" \
+      org.opencontainers.image.description="AI-Powered Docker Control Plane Backend" \
+      org.opencontainers.image.vendor="M3TAL" \
+      org.opencontainers.image.logo="https://raw.githubusercontent.com/jakej985-rgb/M3tal-Media-Server/main/docs/logo.svg"
+
 # Run the backend
 CMD ["./m3tal-backend"]
