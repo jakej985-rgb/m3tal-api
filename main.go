@@ -177,6 +177,11 @@ func (s *M3talState) Save(stateDir string) {
 	saveAtomic(filepath.Join(stateDir, "network.json"), map[string]interface{}{"metrics": s.Network, "links": s.NetworkL})
 	saveAtomic(filepath.Join(stateDir, "anomalies.json"), map[string]interface{}{"issues": s.Anomalies})
 	saveAtomic(filepath.Join(stateDir, "decisions.json"), map[string]interface{}{"actions": s.Decisions})
+	saveAtomic(filepath.Join(stateDir, "health.json"), map[string]interface{}{
+		"status":     "online",
+		"containers": s.Containers,
+		"timestamp":  s.Timestamp,
+	})
 	saveAtomic(filepath.Join(stateDir, "health_report.json"), s.Health)
 }
 
