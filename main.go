@@ -287,11 +287,70 @@ func main() {
 	go notifyAgent(state)
 	go saveAgent(ctx, state, stateDir)
 	go historyAgent(state, stateDir)
+	go apiAgent(ctx, state)
 
 	select {}
 }
 
 // --- Agents ---
+
+func apiAgent(ctx context.Context, s *M3talState) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		log.Printf("❌ API AGENT: Failed to init Docker client: %v", err)
+		return
+	}
+
+	http.HandleFunc("/api/containers/start", func(w http.ResponseWriter, r *http.Request) {
+		handleContainerAction(ctx, cli, w, r, "start")
+	})
+	http.HandleFunc("/api/containers/stop", func(w http.ResponseWriter, r *http.Request) {
+		handleContainerAction(ctx, cli, w, r, "stop")
+	})
+	http.HandleFunc("/api/containers/restart", func(w http.ResponseWriter, r *http.Request) {
+		handleContainerAction(ctx, cli, w, r, "restart")
+	})
+
+	log.Printf("🚀 Control Plane API listening on :5050")
+	if err := http.ListenAndServe(":5050", nil); err != nil {
+		log.Printf("❌ API AGENT: Server failed: %v", err)
+	}
+}
+
+func handleContainerAction(ctx context.Context, cli *client.Client, w http.ResponseWriter, r *http.Request, action string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var err error
+	switch action {
+	case "start":
+		err = cli.ContainerStart(ctx, req.Name, client.ContainerStartOptions{})
+	case "stop":
+		timeout := 10 * time.Second
+		err = cli.ContainerStop(ctx, req.Name, &timeout)
+	case "restart":
+		err = cli.ContainerRestart(ctx, req.Name, client.ContainerRestartOptions{})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": fmt.Sprintf("Container %s %sed", req.Name, action)})
+}
 
 func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
 	ticker := time.NewTicker(2 * time.Second)
