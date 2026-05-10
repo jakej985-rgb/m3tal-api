@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release Version (e.g., v1.4.0)'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -40,24 +45,32 @@ jobs:
       - name: Calculate Version
         id: version
         run: |
-          # Read base version from VERSION file
-          if [ -f VERSION ]; then
-            FILE_VERSION=$(cat VERSION | tr -d ' \n\r')
+          IS_RELEASE="false"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.release_version }}" != "" ]; then
+            IS_RELEASE="true"
+            FULL_VERSION="${{ github.event.inputs.release_version }}"
+            echo "Manual Release Version: ${FULL_VERSION}"
           else
-            FILE_VERSION="v1.4.0"
-          fi
+            # Read base version from VERSION file
+            if [ -f VERSION ]; then
+              FILE_VERSION=$(cat VERSION | tr -d ' \n\r')
+            else
+              FILE_VERSION="v1.0.0"
+            fi
 
-          if [[ $FILE_VERSION =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
-            BASE_VERSION="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-          else
-            BASE_VERSION="v1.4.0"
-          fi
+            # Extract base X.Y.Z
+            if [[ $FILE_VERSION =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              BASE_VERSION="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            else
+              BASE_VERSION="v1.0.0"
+            fi
 
-          FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}"
-          echo "Computed version: ${FULL_VERSION}"
+            FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}-test"
+            echo "Test Version: ${FULL_VERSION}"
+          fi
 
           echo "VERSION=${FULL_VERSION}" >> $GITHUB_OUTPUT
-          echo "${FULL_VERSION}" > VERSION
+          echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
 
       - name: Extract metadata (tags, labels) for Control Plane Backend
         id: meta
@@ -65,8 +78,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo_name.outputs.repo }}
           tags: |
-            type=raw,value=latest
             type=raw,value=${{ steps.version.outputs.VERSION }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.IS_RELEASE == 'true' }}
 
       - name: Build and push Control Plane Backend
         uses: docker/build-push-action@v5
@@ -78,9 +91,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Commit and Push Version Bump
+        if: steps.version.outputs.IS_RELEASE == 'true'
         run: |
+          echo "${{ steps.version.outputs.VERSION }}" > VERSION
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add VERSION
-          git diff-index --quiet HEAD || git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }} [skip ci]"
+          git diff-index --quiet HEAD || git commit -m "chore: release version ${{ steps.version.outputs.VERSION }} [skip ci]"
           git push
+
