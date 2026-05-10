@@ -662,8 +662,14 @@ func hardwareAgent(s *M3talState) {
 							switch n {
 							case "amdgpu", "radeon":
 								gpuT = t
-							case "coretemp", "cpu_thermal", "k10temp":
-								if cpuT == 0 || t > cpuT {
+							case "coretemp", "cpu_thermal", "k10temp", "zenpower", "acpitz", "it87":
+								// Prioritize the highest found temperature for CPU
+								if t > cpuT {
+									cpuT = t
+								}
+							default:
+								// Catch-all for other potentially relevant sensors
+								if strings.Contains(strings.ToLower(n), "temp") && t > cpuT {
 									cpuT = t
 								}
 							}
@@ -942,14 +948,25 @@ func storageAgent(s *M3talState) {
 						if matched {
 							fields := strings.Fields(line)
 							if len(fields) > 0 {
-								// Look for the last numeric value on the line
-								for i := len(fields) - 1; i >= 0; i-- {
-									f := fields[i]
-									// Strip non-numeric suffixes
+								// SATA Table detection: starts with a numeric ID and has many columns
+								isSata := len(fields) >= 9 && regexp.MustCompile(`^\d+$`).MatchString(fields[0])
+								
+								if isSata {
+									// In SATA tables, RAW_VALUE is ALWAYS the last field.
+									f := fields[len(fields)-1]
 									f = regexp.MustCompile(`[^\d].*`).ReplaceAllString(f, "")
-									if val, err := strconv.ParseFloat(f, 64); err == nil && val > 0 && val < 150 {
+									if val, err := strconv.ParseFloat(f, 64); err == nil {
 										driveT = val
-										break
+									}
+								} else {
+									// For SAS/NVMe/Other: Look for the first numeric value from the right
+									for i := len(fields) - 1; i >= 0; i-- {
+										f := fields[i]
+										f = regexp.MustCompile(`[^\d].*`).ReplaceAllString(f, "")
+										if val, err := strconv.ParseFloat(f, 64); err == nil && val > 0 && val < 150 {
+											driveT = val
+											break
+										}
 									}
 								}
 							}
