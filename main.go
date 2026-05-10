@@ -406,7 +406,7 @@ func hardwareAgent(s *M3talState) {
 		gpuStats.Temp = gpuT
 		gpuStats.MemTotal = 1024
 
-		// Try radeontop via absolute path (bind-mounted from host)
+		// --- GPU Usage Discovery ---
 		radeontopFound := false
 		radeontopPath := "/usr/bin/radeontop"
 		if _, err := os.Stat(radeontopPath); err == nil {
@@ -425,9 +425,12 @@ func hardwareAgent(s *M3talState) {
 						gpuStats.MemUsed = int(f)
 					}
 				}
+				log.Printf("[GPU] radeontop success: Load=%d%%, VRAM=%dMB", gpuStats.Load, gpuStats.MemUsed)
 			} else {
 				log.Printf("[GPU] radeontop error: %v, output: %s", err, string(output))
 			}
+		} else {
+			log.Printf("[GPU] radeontop not found at %s", radeontopPath)
 		}
 
 		if !radeontopFound {
@@ -438,12 +441,14 @@ func hardwareAgent(s *M3talState) {
 						continue
 					}
 					base := filepath.Join("/sys/class/drm", card.Name(), "device")
+					log.Printf("[GPU] Scanning sysfs for %s...", card.Name())
 					
 					// Load
 					if data, err := os.ReadFile(filepath.Join(base, "gpu_busy_percent")); err == nil {
 						if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
 							gpuStats.Load = val
 							gpuStats.Active = true
+							log.Printf("[GPU] Found load via sysfs: %d%%", val)
 						}
 					}
 					
@@ -452,6 +457,7 @@ func hardwareAgent(s *M3talState) {
 						if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
 							gpuStats.MemUsed = int(val / (1024 * 1024))
 							gpuStats.Active = true
+							log.Printf("[GPU] Found VRAM used via sysfs: %dMB", gpuStats.MemUsed)
 						}
 					}
 					if data, err := os.ReadFile(filepath.Join(base, "mem_info_vram_total")); err == nil {
@@ -462,7 +468,13 @@ func hardwareAgent(s *M3talState) {
 					
 					if gpuStats.Active { break }
 				}
+			} else {
+				log.Printf("[GPU] Failed to read /sys/class/drm: %v", err)
 			}
+		}
+
+		if !gpuStats.Active {
+			log.Printf("[GPU] WARN: No active GPU discovered after all scans.")
 		}
 
 		status := "healthy"
