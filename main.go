@@ -625,11 +625,19 @@ func storageAgent(s *M3talState) {
 				}
 
 				// Strategy: Use chroot /host to run the host's smartctl
-				cmd := exec.Command("chroot", "/host", "smartctl", "-a", phys)
+				// We try absolute path first as host PATH might not be set in chroot
+				cmd := exec.Command("chroot", "/host", "/usr/sbin/smartctl", "-a", phys)
 				output, err := cmd.CombinedOutput()
+				
+				if err != nil {
+					// Try without absolute path
+					cmd = exec.Command("chroot", "/host", "smartctl", "-a", phys)
+					output, err = cmd.CombinedOutput()
+				}
 				
 				// Fallback to direct container execution if chroot fails
 				if err != nil {
+					log.Printf("[STORAGE] chroot smartctl failed: %v, output: %s. Falling back...", err, string(output))
 					cmd = exec.Command("/usr/sbin/smartctl", "-a", phys)
 					output, err = cmd.CombinedOutput()
 				}
