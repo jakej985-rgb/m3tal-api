@@ -143,12 +143,14 @@ type TelegramUpdate struct {
 }
 
 type ContainerMetric struct {
-	Name    string  `json:"name"`
-	CPU     float64 `json:"cpu"`
-	Mem     float64 `json:"mem"`
-	Status  string  `json:"status"`
-	State   string  `json:"state"`
-	Managed bool    `json:"managed"`
+	Name     string  `json:"name"`
+	CPU      float64 `json:"cpu"`
+	Mem      float64 `json:"mem"`
+	MemUsage uint64  `json:"mem_usage"`
+	MemLimit uint64  `json:"mem_limit"`
+	Status   string  `json:"status"`
+	State    string  `json:"state"`
+	Managed  bool    `json:"managed"`
 }
 
 type NetworkMetrics struct {
@@ -548,6 +550,8 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 			
 			cpuPerc := 0.0
 			memPerc := 0.0
+			var memUsage uint64
+			var memLimit uint64
 
 			// Only fetch stats for running containers to save resources
 			if strings.ToLower(string(c.State)) == "running" {
@@ -587,7 +591,9 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 						if v.MemoryStats.Limit > 0 {
 							cache := v.MemoryStats.Stats["inactive_file"]
 							if cache == 0 { cache = v.MemoryStats.Stats["cache"] }
-							memPerc = (float64(v.MemoryStats.Usage - cache) / float64(v.MemoryStats.Limit)) * 100.0
+							memUsage = v.MemoryStats.Usage - cache
+							memLimit = v.MemoryStats.Limit
+							memPerc = (float64(memUsage) / float64(memLimit)) * 100.0
 						}
 					}
 					stats.Body.Close()
@@ -601,12 +607,14 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 				managed = true
 			}
 			newStats = append(newStats, ContainerMetric{
-				Name:    name,
-				CPU:     cpuPerc,
-				Mem:     memPerc,
-				Status:  c.Status,
-				State:   string(c.State),
-				Managed: managed,
+				Name:     name,
+				CPU:      cpuPerc,
+				Mem:      memPerc,
+				MemUsage: memUsage,
+				MemLimit: memLimit,
+				Status:   c.Status,
+				State:    string(c.State),
+				Managed:  managed,
 			})
 		}
 		s.mu.Lock()
@@ -777,8 +785,9 @@ func hardwareAgent(s *M3talState) {
 
 func storageAgent(s *M3talState) {
 	ticker := time.NewTicker(30 * time.Second)
-	// Robust regex to capture the last number on the line (RAW_VALUE) for temperature rows
-	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:)[^\n]*?\s+(\d+)(?:\s|\(|$)`)
+	// Robust regex to capture the last number on the line (RAW_VALUE) for temperature rows. 
+	// We use greedy [^\n]* to ensure we skip intermediate columns (VALUE/WORST) and hit the actual RAW_VALUE at the end.
+	smartRe := regexp.MustCompile(`(?i)(?:Temperature_Celsius|Airflow_Temperature_Cel|Composite\s+Temperature|Current\s+Drive\s+Temperature:)[^\n]*\s+(\d+)(?:\s|\(|$)`)
 
 	// Detect host root mount (bind-mounted at /host)
 	hostRoot := "/host"
