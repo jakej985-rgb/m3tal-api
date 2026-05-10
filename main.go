@@ -151,6 +151,8 @@ type ContainerMetric struct {
 	Status   string  `json:"status"`
 	State    string  `json:"state"`
 	Managed  bool    `json:"managed"`
+	NetRx    uint64  `json:"net_rx"`
+	NetTx    uint64  `json:"net_tx"`
 }
 
 type NetworkMetrics struct {
@@ -552,6 +554,8 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 			memPerc := 0.0
 			var memUsage uint64
 			var memLimit uint64
+			var netRx uint64
+			var netTx uint64
 
 			// Only fetch stats for running containers to save resources
 			if strings.ToLower(string(c.State)) == "running" {
@@ -572,10 +576,14 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 							SystemCPUUsage uint64 `json:"system_cpu_usage"`
 						} `json:"precpu_stats"`
 						MemoryStats struct {
-							Usage    uint64 `json:"usage"`
-							Limit    uint64 `json:"limit"`
-							Stats    map[string]uint64 `json:"stats"`
+							Usage uint64            `json:"usage"`
+							Limit uint64            `json:"limit"`
+							Stats map[string]uint64 `json:"stats"`
 						} `json:"memory_stats"`
+						Networks map[string]struct {
+							RxBytes uint64 `json:"rx_bytes"`
+							TxBytes uint64 `json:"tx_bytes"`
+						} `json:"networks"`
 					}
 					if err := json.NewDecoder(stats.Body).Decode(&v); err == nil {
 						// CPU Calculation
@@ -594,6 +602,12 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 							memUsage = v.MemoryStats.Usage - cache
 							memLimit = v.MemoryStats.Limit
 							memPerc = (float64(memUsage) / float64(memLimit)) * 100.0
+						}
+
+						// Network Aggregation
+						for _, nw := range v.Networks {
+							netRx += nw.RxBytes
+							netTx += nw.TxBytes
 						}
 					}
 					stats.Body.Close()
@@ -615,6 +629,8 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 				Status:   c.Status,
 				State:    string(c.State),
 				Managed:  managed,
+				NetRx:    netRx,
+				NetTx:    netTx,
 			})
 		}
 		s.mu.Lock()
