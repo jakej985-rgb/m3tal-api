@@ -65,8 +65,8 @@ jobs:
               BASE_VERSION="v1.0.0"
             fi
 
-            FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}-test"
-            echo "Test Version: ${FULL_VERSION}"
+            FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}-debug"
+            echo "Debug Version: ${FULL_VERSION}"
           fi
 
           echo "VERSION=${FULL_VERSION}" >> $GITHUB_OUTPUT
@@ -80,6 +80,7 @@ jobs:
           tags: |
             type=raw,value=${{ steps.version.outputs.VERSION }}
             type=raw,value=latest,enable=${{ steps.version.outputs.IS_RELEASE == 'true' }}
+            type=raw,value=debug,enable=${{ steps.version.outputs.IS_RELEASE == 'false' }}
 
       - name: Build and push Control Plane Backend
         uses: docker/build-push-action@v5
