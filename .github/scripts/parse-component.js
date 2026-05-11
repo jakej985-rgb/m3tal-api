@@ -1,5 +1,9 @@
 import fs from "fs";
 
+if (!fs.existsSync("docs")) {
+  fs.mkdirSync("docs");
+}
+
 const component = {
   name: "m3tal-goback",
   role: "API / System Intelligence",
