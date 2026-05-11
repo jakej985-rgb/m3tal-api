@@ -16,10 +16,12 @@ NOT the brain.
 
 ## Endpoints
 
+```
 GET  /status
 GET  /metrics
 POST /action/restart/{container}
 POST /action/scan/{service}
+```
 
 ---
 
@@ -27,7 +29,7 @@ POST /action/scan/{service}
 
 ### 1. No logic
 
-Do NOT:
+❌ Do NOT:
 - run agents
 - make decisions
 - duplicate core logic
@@ -38,11 +40,15 @@ Do NOT:
 
 Bad:
 
+```go
 docker restart radarr
+```
 
 Good:
 
+```go
 exec.Command("../m3tal-core/run.sh")
+```
 
 ---
 
@@ -50,20 +56,22 @@ exec.Command("../m3tal-core/run.sh")
 
 Read:
 
+```
 ../m3tal-core/state/system.json
+```
 
 ---
 
 ### 4. Trigger actions via core
 
-- Call scripts
-- Call CLI
-- Never act directly
+* Call scripts
+* Call CLI
+* Never act directly
 
 ---
 
 ## Done When
 
-- API only reads + triggers
-- No system logic exists here
-- Works even if core changes internally
+* API only reads + triggers
+* No system logic exists here
+* Works even if core changes internally
