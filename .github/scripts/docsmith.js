@@ -2,7 +2,7 @@ import fs from "fs";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 const generatedReadme = fs.existsSync("README.generated.md")
   ? fs.readFileSync("README.generated.md", "utf-8")
