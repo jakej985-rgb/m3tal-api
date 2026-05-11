@@ -33,20 +33,12 @@ ${readme}
 
 async function run() {
   const modelsToTry = [
-    "gemini-2.5-flash-tts",
-    "gemini-2.5-flash",
-    "gemini-3-flash",
-    "gemini-2-flash",
-    "gemma-3-27b",
-    "gemma-3-12b",
-    "gemma-3-4b",
-    "gemma-3-1b",
-    "gemini-1.5-flash", 
-    "gemini-1.5-flash-latest", 
-    "gemini-1.5-flash-001", 
-    "gemini-1.5-flash-002", 
-    "gemini-1.5-pro", 
-    "gemini-pro"
+    "gemini-3-flash",          // Tier 1: Primary (5 RPM / 20 RPD)
+    "gemini-3.1-flash-lite",   // Tier 2: High-Volume Fallback (15 RPM / 500 RPD)
+    "gemini-2.5-flash",        // Tier 3: Secondary Fallback (5 RPM / 20 RPD)
+    "gemini-2.5-flash-lite",   // Tier 3: Tertiary Fallback (10 RPM / 20 RPD)
+    "gemini-1.5-flash",        // Legacy Fallback
+    "gemini-pro"               // Universal Fallback
   ];
 
   for (const modelName of modelsToTry) {
