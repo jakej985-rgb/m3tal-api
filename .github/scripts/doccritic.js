@@ -53,9 +53,13 @@ async function run() {
       const output = result.response.text();
       fs.writeFileSync("README_REVIEW.md", output);
 
+      console.log("--- DocCritic Audit Report ---");
+      console.log(output);
+      console.log("------------------------------");
+
       // Fail CI if blockers exist
       if (output.includes("BLOCKER")) {
-        console.error("DocCritic found BLOCKER issues");
+        console.error("DocCritic found BLOCKER issues. Check the report above.");
         process.exit(1);
       }
 
