@@ -2,7 +2,6 @@ import fs from "fs";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 const readme = fs.readFileSync("README.md", "utf-8");
 
@@ -33,22 +32,31 @@ ${readme}
 `;
 
 async function run() {
-  try {
-    const result = await model.generateContent(prompt);
-    const output = result.response.text();
-    fs.writeFileSync("README_REVIEW.md", output);
+  const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash-001", "gemini-pro"];
 
-    // Fail CI if blockers exist
-    if (output.includes("BLOCKER")) {
-      console.error("DocCritic found BLOCKER issues");
-      process.exit(1);
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`Attempting to use model: ${modelName}`);
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(prompt);
+      const output = result.response.text();
+      fs.writeFileSync("README_REVIEW.md", output);
+
+      // Fail CI if blockers exist
+      if (output.includes("BLOCKER")) {
+        console.error("DocCritic found BLOCKER issues");
+        process.exit(1);
+      }
+
+      console.log(`DocCritic complete using ${modelName}`);
+      return;
+    } catch (error) {
+      console.warn(`Model ${modelName} failed: ${error.message}`);
     }
-
-    console.log("DocCritic complete (Gemini)");
-  } catch (error) {
-    console.error("DocCritic failed:", error);
-    process.exit(1);
   }
+
+  console.error("All Gemini models failed. Please check your API key and region permissions.");
+  process.exit(1);
 }
 
 run();
