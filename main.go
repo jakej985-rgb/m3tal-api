@@ -212,6 +212,8 @@ func saveAtomic(path string, data interface{}) {
 // --- Main ---
 
 func historyAgent(s *M3talState, stateDir string) {
+	logger := getAgentLogger("history")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(60 * time.Second)
 	historyPath := filepath.Join(stateDir, "history.json")
 
@@ -240,7 +242,7 @@ func historyAgent(s *M3talState, stateDir string) {
 		var history []HistoryPoint
 		if data, err := os.ReadFile(historyPath); err == nil {
 			if err := json.Unmarshal(data, &history); err != nil {
-				log.Printf("[HISTORY] Failed to parse existing history: %v", err)
+				logger.Printf(" Failed to parse existing history: %v", err)
 			}
 		}
 
@@ -261,6 +263,21 @@ func historyAgent(s *M3talState, stateDir string) {
 	for range ticker.C {
 		record()
 	}
+}
+
+
+func getAgentLogger(name string) *log.Logger {
+	stateDir := os.Getenv("STATE_DIR")
+	if stateDir == "" {
+		stateDir = filepath.Join("..", "state")
+	}
+	logsDir := filepath.Join(stateDir, "logs")
+	os.MkdirAll(logsDir, 0755)
+	logFile, err := os.OpenFile(filepath.Join(logsDir, name+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return log.New(os.Stdout, "["+name+"] ", log.LstdFlags)
+	}
+	return log.New(io.MultiWriter(os.Stdout, logFile), "["+name+"] ", log.LstdFlags)
 }
 
 func main() {
@@ -307,9 +324,11 @@ func main() {
 // --- Agents ---
 
 func apiAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("api")
+	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Printf("❌ API AGENT: Failed to init Docker client: %v", err)
+		logger.Printf("❌ Failed to init Docker client: %v", err)
 		return
 	}
 
@@ -326,9 +345,9 @@ func apiAgent(ctx context.Context, s *M3talState) {
 		handleContainerLogs(ctx, cli, w, r)
 	})
 
-	log.Printf("🚀 Control Plane API listening on :5050")
+	logger.Printf("🚀 Control Plane API listening on :5050")
 	if err := http.ListenAndServe(":5050", nil); err != nil {
-		log.Printf("❌ API AGENT: Server failed: %v", err)
+		logger.Printf("❌ Server failed: %v", err)
 	}
 }
 
@@ -449,6 +468,8 @@ func handleContainerLogs(ctx context.Context, cli *client.Client, w http.Respons
 }
 
 func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
+	logger := getAgentLogger("save")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(2 * time.Second)
 	for {
 		select {
@@ -461,6 +482,8 @@ func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
 }
 
 func metricsAgent(s *M3talState) {
+	logger := getAgentLogger("metrics")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(2 * time.Second)
 	var lastRecv, lastSent uint64
 	var lastTime time.Time
@@ -533,6 +556,8 @@ func formatSpeed(bytesPerSec float64) string {
 }
 
 func dockerAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("docker")
+	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return
@@ -641,6 +666,8 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 }
 
 func hardwareAgent(s *M3talState) {
+	logger := getAgentLogger("hardware")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(10 * time.Second)
 	gpuRe := regexp.MustCompile(`gpu\s+([\d\.]+)%`)
 	vramRe := regexp.MustCompile(`vram\s+[\d\.]+% ([\d\.]+)mb`)
@@ -716,10 +743,10 @@ func hardwareAgent(s *M3talState) {
 					gpuStats.MemUsed = int(f)
 				}
 			}
-			log.Printf("[GPU] radeontop (direct) success: Load=%d%%", gpuStats.Load)
+			logger.Printf(" radeontop (direct) success: Load=%d%%", gpuStats.Load)
 		} else {
 			// Attempt 2: chroot /host (uses host libraries)
-			log.Printf("[GPU] radeontop (direct) failed, trying chroot /host...")
+			logger.Printf(" radeontop (direct) failed, trying chroot /host...")
 			cmd = exec.Command("chroot", "/host", "radeontop", "-d", "-", "-l", "1")
 			if output, err := cmd.CombinedOutput(); err == nil {
 				line := string(output)
@@ -735,9 +762,9 @@ func hardwareAgent(s *M3talState) {
 						gpuStats.MemUsed = int(f)
 					}
 				}
-				log.Printf("[GPU] radeontop (chroot) success: Load=%d%%", gpuStats.Load)
+				logger.Printf(" radeontop (chroot) success: Load=%d%%", gpuStats.Load)
 			} else {
-				log.Printf("[GPU] radeontop (chroot) failed: %v, output: %s", err, string(output))
+				logger.Printf(" radeontop (chroot) failed: %v, output: %s", err, string(output))
 			}
 		}
 
@@ -749,14 +776,14 @@ func hardwareAgent(s *M3talState) {
 						continue
 					}
 					base := filepath.Join("/sys/class/drm", card.Name(), "device")
-					log.Printf("[GPU] Scanning sysfs for %s...", card.Name())
+					logger.Printf(" Scanning sysfs for %s...", card.Name())
 					
 					// Load
 					if data, err := os.ReadFile(filepath.Join(base, "gpu_busy_percent")); err == nil {
 						if val, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
 							gpuStats.Load = val
 							gpuStats.Active = true
-							log.Printf("[GPU] Found load via sysfs: %d%%", val)
+							logger.Printf(" Found load via sysfs: %d%%", val)
 						}
 					}
 					
@@ -765,7 +792,7 @@ func hardwareAgent(s *M3talState) {
 						if val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
 							gpuStats.MemUsed = int(val / (1024 * 1024))
 							gpuStats.Active = true
-							log.Printf("[GPU] Found VRAM used via sysfs: %dMB", gpuStats.MemUsed)
+							logger.Printf(" Found VRAM used via sysfs: %dMB", gpuStats.MemUsed)
 						}
 					}
 					if data, err := os.ReadFile(filepath.Join(base, "mem_info_vram_total")); err == nil {
@@ -777,12 +804,12 @@ func hardwareAgent(s *M3talState) {
 					if gpuStats.Active { break }
 				}
 			} else {
-				log.Printf("[GPU] Failed to read /sys/class/drm: %v", err)
+				logger.Printf(" Failed to read /sys/class/drm: %v", err)
 			}
 		}
 
 		if !gpuStats.Active {
-			log.Printf("[GPU] WARN: No active GPU discovered after all scans.")
+			logger.Printf(" WARN: No active GPU discovered after all scans.")
 		}
 
 		status := "healthy"
@@ -806,6 +833,8 @@ func hardwareAgent(s *M3talState) {
 }
 
 func storageAgent(s *M3talState) {
+	logger := getAgentLogger("storage")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(30 * time.Second)
 	// Identifiers for temperature lines across SATA, SAS, and NVMe
 	tempKeywords := []string{"Temperature_Celsius", "Airflow_Temperature_Cel", "Composite Temperature", "Current Drive Temperature:"}
@@ -974,7 +1003,7 @@ func storageAgent(s *M3talState) {
 						if driveT > 0 { break }
 					}
 				} else if err != nil {
-					log.Printf("[STORAGE] smartctl failed for %s: %v", phys, err)
+					logger.Printf(" smartctl failed for %s: %v", phys, err)
 				}
 			}
 
@@ -1025,6 +1054,8 @@ func storageAgent(s *M3talState) {
 }
 
 func scoutAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("scout")
+	logger.Println("Agent started")
 	cli, _ := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	ticker := time.NewTicker(60 * time.Second)
 	hostRe := regexp.MustCompile(`Host\(` + "`" + `([^` + "`" + `]+)` + "`" + `\)`)
@@ -1103,6 +1134,8 @@ func scoutAgent(ctx context.Context, s *M3talState) {
 }
 
 func logObserverAgent(ctx context.Context) {
+	logger := getAgentLogger("logobserver")
+	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return
@@ -1192,6 +1225,8 @@ func logObserverAgent(ctx context.Context) {
 }
 
 func orchestratorAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("orchestrator")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -1282,6 +1317,8 @@ func getUptime() string {
 }
 
 func healerAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("healer")
+	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return
@@ -1299,7 +1336,7 @@ func healerAgent(ctx context.Context, s *M3talState) {
 
 				_, err = cli.ContainerRestart(ctx, c.Name, client.ContainerRestartOptions{})
 				if err != nil {
-					log.Printf("❌ HEALER: Failed to restart %s: %v", c.Name, err)
+					logger.Printf("❌ Failed to restart %s: %v", c.Name, err)
 					continue
 				}
 
@@ -1321,6 +1358,8 @@ func healerAgent(ctx context.Context, s *M3talState) {
 }
 
 func notifyAgent(s *M3talState) {
+	logger := getAgentLogger("notify")
+	logger.Println("Agent started")
 	ticker := time.NewTicker(30 * time.Second)
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chat := os.Getenv("TG_ALERT_CHAT_ID")
@@ -1344,6 +1383,8 @@ func notifyAgent(s *M3talState) {
 }
 
 func listenerAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("listener")
+	logger.Println("Agent started")
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	allowedUsers := os.Getenv("ALLOWED_USERS")
 	if token == "" {
