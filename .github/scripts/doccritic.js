@@ -57,10 +57,11 @@ async function run() {
       console.log(output);
       console.log("------------------------------");
 
-      // Fail CI if blockers exist
+      // Log results but do NOT fail CI (per user request: "shouldnt fail if qa has change remendations")
       if (output.includes("BLOCKER")) {
-        console.error("DocCritic found BLOCKER issues. Check the report above.");
-        process.exit(1);
+        console.warn("DocCritic found BLOCKER issues. Please review README_REVIEW.md and address them when possible.");
+      } else {
+        console.log("DocCritic audit passed (No Blockers).");
       }
 
       console.log(`DocCritic complete using ${modelName}`);
