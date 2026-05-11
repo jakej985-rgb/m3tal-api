@@ -47,7 +47,7 @@ async function run() {
       const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent(prompt);
       const output = result.response.text();
-      fs.writeFileSync("README_REVIEW_FIXES.md", output);
+      fs.writeFileSync("FIXES.md", output);
 
       console.log("--- DocCritic Audit Report ---");
       console.log(output);
@@ -55,9 +55,11 @@ async function run() {
 
       // Log results but do NOT fail CI (per user request: "shouldnt fail if qa has change remendations")
       if (output.includes("BLOCKER")) {
-        console.warn("DocCritic found BLOCKER issues. Please review README_REVIEW_FIXES.md and address them when possible.");
+        console.warn("DocCritic found BLOCKER issues. Please review FIXES.md and address them when possible.");
+        fs.writeFileSync(".doc-failed", "true");
       } else {
         console.log("DocCritic audit passed (No Blockers).");
+        if (fs.existsSync(".doc-failed")) fs.unlinkSync(".doc-failed");
       }
 
       console.log(`DocCritic complete using ${modelName}`);
