@@ -1,4 +1,4 @@
-name: M3TAL CLI Orchestration CI
+name: M3TAL GoBack CI
 
 on:
   push:
@@ -6,39 +6,25 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  # Opt into Node.js 24 as requested by GitHub Actions deprecation notice
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  test-python-cli:
+  test-goback:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - name: Create dummy .env
-      run: echo "DASHBOARD_SECRET=dummy_secret" > .env
-    - name: Verify CLI script
-      run: python m3tal.py --help
-    - name: Verify CLI Up dry run
-      run: python m3tal.py up --help
 
-  test-python-cli-windows:
-    # Notice: windows-2025 is redirected, so we use windows-latest (standard)
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Set up Go
+      uses: actions/setup-go@v5
       with:
-        python-version: '3.10'
-    - name: Create dummy .env
-      run: echo "DASHBOARD_SECRET=dummy_secret" > .env
-    - name: Verify CLI script on Windows
-      run: python m3tal.py --help
+        go-version: '1.22'
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Build check
+      run: go build -v ./...
+
+    - name: Run Tests
+      run: go test -v ./...
 
   shellcheck:
     runs-on: ubuntu-latest
@@ -49,3 +35,4 @@ jobs:
       with:
         scandir: '.'
         severity: warning
+        ignore_paths: 'vendor node_modules venv .agents'
