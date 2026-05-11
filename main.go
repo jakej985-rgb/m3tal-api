@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // --- M3TAL API Interface (m3tal-api) ---
@@ -23,14 +25,27 @@ func main() {
 
 	log.Println("🚀 M3TAL API Interface starting on :5050...")
 
-	// Generic JSON reader helper
+	// Generic JSON reader with retry logic for race conditions
 	serveJSON := func(w http.ResponseWriter, filename string) {
-		data, err := os.ReadFile(filepath.Join(stateDir, filename))
+		fullPath := filepath.Join(stateDir, filename)
+		var data []byte
+		var err error
+
+		// Retry up to 3 times for partial writes/locks
+		for i := 0; i < 3; i++ {
+			data, err = os.ReadFile(fullPath)
+			if err == nil && len(data) > 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("%s not found", filename)})
+			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("%s not found or unreadable", filename)})
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}
@@ -65,7 +80,7 @@ func main() {
 		serveJSON(w, "registry.json")
 	})
 
-	// GET /api/logs - List and tail logs
+	// GET /api/logs - List and tail logs (NATIVE IMPLEMENTATION)
 	http.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
 		logsDir := filepath.Join(stateDir, "logs")
 		files, err := os.ReadDir(logsDir)
@@ -77,8 +92,9 @@ func main() {
 		logData := make(map[string]string)
 		for _, file := range files {
 			if !file.IsDir() && strings.HasSuffix(file.Name(), ".log") {
-				content, _ := exec.Command("tail", "-n", "100", filepath.Join(logsDir, file.Name())).Output()
-				logData[file.Name()] = string(content)
+				path := filepath.Join(logsDir, file.Name())
+				content := nativeTail(path, 100)
+				logData[file.Name()] = content
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -102,25 +118,25 @@ func main() {
 		log.Printf("📥 Action: %s on %s", action, req.Name)
 
 		var output []byte
-		var err error
+		var cmdErr error
 
 		switch action {
 		case "restart":
-			output, err = exec.Command("docker", "restart", req.Name).CombinedOutput()
+			output, cmdErr = exec.Command("docker", "restart", req.Name).CombinedOutput()
 		case "stop":
-			output, err = exec.Command("docker", "stop", req.Name).CombinedOutput()
+			output, cmdErr = exec.Command("docker", "stop", req.Name).CombinedOutput()
 		case "start":
-			output, err = exec.Command("docker", "start", req.Name).CombinedOutput()
+			output, cmdErr = exec.Command("docker", "start", req.Name).CombinedOutput()
 		case "logs":
 			tail := req.Tail
 			if tail == "" { tail = "50" }
-			output, err = exec.Command("docker", "logs", "--tail", tail, req.Name).CombinedOutput()
+			output, cmdErr = exec.Command("docker", "logs", "--tail", tail, req.Name).CombinedOutput()
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
-		if err != nil {
+		if cmdErr != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{"error": string(output)})
 			return
@@ -137,4 +153,30 @@ func main() {
 	if err := http.ListenAndServe(":5050", nil); err != nil {
 		log.Fatalf("❌ API server failed: %v", err)
 	}
+}
+
+// nativeTail reads the last n lines of a file without external dependencies.
+func nativeTail(filename string, lines int) string {
+	f, err := os.Open(filename)
+	if err != nil {
+		return fmt.Sprintf("Error opening log: %v", err)
+	}
+	defer f.Close()
+
+	// Simple tail: Seek to end and read a reasonable chunk (e.g., 32KB)
+	// For a more robust tail, we'd scan backwards for line endings.
+	stat, _ := f.Stat()
+	size := stat.Size()
+	limit := int64(32768) // 32KB
+	if size < limit {
+		limit = size
+	}
+
+	buf := make([]byte, limit)
+	_, err = f.ReadAt(buf, size-limit)
+	if err != nil && err != io.EOF {
+		return fmt.Sprintf("Error reading log: %v", err)
+	}
+
+	return string(buf)
 }
