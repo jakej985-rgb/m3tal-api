@@ -301,22 +301,21 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	log.Println("🚀 M3TAL Go Backend (Linux-Ready) starting...")
+	log.Println("🚀 M3TAL Go Backend (6-Pillar) starting...")
 
-	// Launch Agents
+	// Launch Core Pillars
+	go registryAgent(ctx, state, stateDir)
+	go monitorAgent(ctx, state)
 	go metricsAgent(state)
-	go dockerAgent(ctx, state)
-	go hardwareAgent(state)
-	go storageAgent(state)
-	go scoutAgent(ctx, state)
-	go listenerAgent(ctx, state)
-	go orchestratorAgent(ctx, state)
-	go logObserverAgent(ctx)
-	go healerAgent(ctx, state)
-	go notifyAgent(state)
-	go saveAgent(ctx, state, stateDir)
+	go anomalyAgent(ctx, state)
+	go decisionAgent(ctx, state)
+	go reconcileAgent(ctx, state)
+
+	// Launch Supporting Services
 	go historyAgent(state, stateDir)
 	go apiAgent(ctx, state)
+	go notifyAgent(state)
+	go listenerAgent(ctx, state)
 
 	select {}
 }
@@ -467,8 +466,8 @@ func handleContainerLogs(ctx context.Context, cli *client.Client, w http.Respons
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "logs": output})
 }
 
-func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
-	logger := getAgentLogger("save")
+func registryAgent(ctx context.Context, s *M3talState, stateDir string) {
+	logger := getAgentLogger("registry")
 	logger.Println("Agent started")
 	ticker := time.NewTicker(2 * time.Second)
 	for {
@@ -482,8 +481,15 @@ func saveAgent(ctx context.Context, s *M3talState, stateDir string) {
 }
 
 func metricsAgent(s *M3talState) {
+	// Group host, gpu, and storage into the Metrics pillar
+	go hostMetricsLoop(s)
+	go gpuMetricsLoop(s)
+	go storageMetricsLoop(s)
+}
+
+func hostMetricsLoop(s *M3talState) {
 	logger := getAgentLogger("metrics")
-	logger.Println("Agent started")
+	logger.Println("Host metrics loop started")
 	ticker := time.NewTicker(2 * time.Second)
 	var lastRecv, lastSent uint64
 	var lastTime time.Time
@@ -555,8 +561,8 @@ func formatSpeed(bytesPerSec float64) string {
 	return fmt.Sprintf("%.1f GB/s", bytesPerSec/(1024*1024*1024))
 }
 
-func dockerAgent(ctx context.Context, s *M3talState) {
-	logger := getAgentLogger("docker")
+func monitorAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("monitor")
 	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -665,9 +671,9 @@ func dockerAgent(ctx context.Context, s *M3talState) {
 	}
 }
 
-func hardwareAgent(s *M3talState) {
-	logger := getAgentLogger("hardware")
-	logger.Println("Agent started")
+func gpuMetricsLoop(s *M3talState) {
+	logger := getAgentLogger("metrics")
+	logger.Println("GPU metrics loop started")
 	ticker := time.NewTicker(10 * time.Second)
 	gpuRe := regexp.MustCompile(`gpu\s+([\d\.]+)%`)
 	vramRe := regexp.MustCompile(`vram\s+[\d\.]+% ([\d\.]+)mb`)
@@ -832,9 +838,9 @@ func hardwareAgent(s *M3talState) {
 	}
 }
 
-func storageAgent(s *M3talState) {
-	logger := getAgentLogger("storage")
-	logger.Println("Agent started")
+func storageMetricsLoop(s *M3talState) {
+	logger := getAgentLogger("metrics")
+	logger.Println("Storage metrics loop started")
 	ticker := time.NewTicker(30 * time.Second)
 	// Identifiers for temperature lines across SATA, SAS, and NVMe
 	tempKeywords := []string{"Temperature_Celsius", "Airflow_Temperature_Cel", "Composite Temperature", "Current Drive Temperature:"}
@@ -1053,9 +1059,15 @@ func storageAgent(s *M3talState) {
 	}
 }
 
-func scoutAgent(ctx context.Context, s *M3talState) {
-	logger := getAgentLogger("scout")
-	logger.Println("Agent started")
+func anomalyAgent(ctx context.Context, s *M3talState) {
+	// Group scout and log observer into the Anomaly pillar
+	go scoutLoop(ctx, s)
+	go logObserverLoop(ctx)
+}
+
+func scoutLoop(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("anomaly")
+	logger.Println("Scout loop started")
 	cli, _ := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	ticker := time.NewTicker(60 * time.Second)
 	hostRe := regexp.MustCompile(`Host\(` + "`" + `([^` + "`" + `]+)` + "`" + `\)`)
@@ -1133,9 +1145,9 @@ func scoutAgent(ctx context.Context, s *M3talState) {
 	}
 }
 
-func logObserverAgent(ctx context.Context) {
-	logger := getAgentLogger("logobserver")
-	logger.Println("Agent started")
+func logObserverLoop(ctx context.Context) {
+	logger := getAgentLogger("anomaly")
+	logger.Println("Log observer loop started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return
@@ -1224,8 +1236,8 @@ func logObserverAgent(ctx context.Context) {
 	}
 }
 
-func orchestratorAgent(ctx context.Context, s *M3talState) {
-	logger := getAgentLogger("orchestrator")
+func decisionAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("decision")
 	logger.Println("Agent started")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -1316,8 +1328,8 @@ func getUptime() string {
 	return fmt.Sprintf("%dh", hours)
 }
 
-func healerAgent(ctx context.Context, s *M3talState) {
-	logger := getAgentLogger("healer")
+func reconcileAgent(ctx context.Context, s *M3talState) {
+	logger := getAgentLogger("reconcile")
 	logger.Println("Agent started")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
