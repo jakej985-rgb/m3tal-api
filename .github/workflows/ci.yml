@@ -1,4 +1,4 @@
-name: M3TAL Backend CI
+name: M3TAL CLI Orchestration CI
 
 on:
   push:
@@ -7,21 +7,45 @@ on:
     branches: [ main ]
 
 env:
+  # Opt into Node.js 24 as requested by GitHub Actions deprecation notice
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  test-go-backend:
+  test-python-cli:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        go-version: '1.22'
-        cache-dependency-path: go.sum
-    - name: Go Format
-      run: go fmt ./...
-    - name: Go Vet
-      run: go vet ./...
-    - name: Go Build
-      run: go build ./...
+        python-version: '3.10'
+    - name: Create dummy .env
+      run: echo "DASHBOARD_SECRET=dummy_secret" > .env
+    - name: Verify CLI script
+      run: python m3tal.py --help
+    - name: Verify CLI Up dry run
+      run: python m3tal.py up --help
+
+  test-python-cli-windows:
+    # Notice: windows-2025 is redirected, so we use windows-latest (standard)
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Create dummy .env
+      run: echo "DASHBOARD_SECRET=dummy_secret" > .env
+    - name: Verify CLI script on Windows
+      run: python m3tal.py --help
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Lint shell scripts
+      uses: ludeeus/action-shellcheck@master
+      with:
+        scandir: '.'
+        severity: warning
