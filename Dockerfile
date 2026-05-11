@@ -4,11 +4,11 @@ FROM golang:1.24-alpine AS builder
 # NO NETWORK REQUIRED: Using local vendor folder
 WORKDIR /app
 
-# Copy all source and dependencies
+# Copy the entire source directory to satisfy local module dependencies
 COPY . .
 
-# Build for Linux using the vendor folder
-# -mod=vendor tells Go to use the local vendor directory instead of the network
+# Build for Linux from the go-backend directory
+WORKDIR /app/go-backend
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -o m3tal-backend .
 
 # Use a stable alpine version and enable community repo for hardware tools
