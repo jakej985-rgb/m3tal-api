@@ -33,6 +33,10 @@ ${readme}
 
 async function run() {
   const modelsToTry = [
+    "gemini-2.5-flash-tts",
+    "gemini-2.5-flash",
+    "gemini-3-flash",
+    "gemini-2-flash",
     "gemini-1.5-flash", 
     "gemini-1.5-flash-latest", 
     "gemini-1.5-flash-001", 
