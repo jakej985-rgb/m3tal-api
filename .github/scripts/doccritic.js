@@ -32,7 +32,14 @@ ${readme}
 `;
 
 async function run() {
-  const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash-001", "gemini-pro"];
+  const modelsToTry = [
+    "gemini-1.5-flash", 
+    "gemini-1.5-flash-latest", 
+    "gemini-1.5-flash-001", 
+    "gemini-1.5-flash-002", 
+    "gemini-1.5-pro", 
+    "gemini-pro"
+  ];
 
   for (const modelName of modelsToTry) {
     try {
